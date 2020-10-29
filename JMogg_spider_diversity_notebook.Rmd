@@ -1,0 +1,836 @@
+---
+title: Diversity analysis of *Araneae* (spiders) specimens in the Barcode of Life
+  Database
+author: "Jason A. Moggridge"
+date: "2020/10/07"
+output:
+  html_notebook:
+    toc: true
+    toc_depth: 4
+    toc_float: yes
+    df_print: paged
+    theme: flatly
+    highlight: textmate
+bibliography: references.bib
+---
+
+*Suggestion: use option 'hide all code' in the menu at top-right, then expand code chunks when interested.*<br>
+*Note: Time consuming computations have been #-commented out for convenience, after data were saved*
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+-----
+
+# Introduction
+
+Spiders are an incredibly diverse order of arthropods that play vital roles in diverse ecosystems, particularly as key predators that modulate biomass on a global scale [@Nyffeler2017]. There are currently 48,789 species described in the World spider catalog (https://wsc.nmbe.ch/) and novel species are being added on a regular basis. Differentiation of such a large number of species based on morphology alone is tremendously challenging. This difficulty is compounded by other inconvenient characteristics of spiders including sexual dimorphism, developmental changes in morphology, and their cryptic lifestyles [@Tyagi2019].
+
+As morphological classification of large numbers of spiders is generally tedious and impractical, DNA barcoding has become routine method for species identification in ecological studies [@Tahir2019]. The characteristics of the mitochondrial *cytochrome c oxidase* subunit 1 (CO1) gene make it an ideal marker for differentiating species [@Ratnasingham2007; @Ratnasingham2013]. In a relatively limited time, a large amount of barcode sequences have been accumulated in the Barcode of Life Database, making it a useful resource for ecology research.
+
+Spider diversity generally decreases with distance from the equator [@Piel2018]. There is some debate as to whether the distribution is even between hemispheres or pear-shaped with the southern hemisphere being more diverse. In this work, I examined whether the collection of DNA-barcoded spider specimens in the BOLD database shows the diversity trend across latitudes as is reported in the literature. Additionally, sampling depth and geographic bias of the BOLD data were evaluated.
+
+-----
+  
+# Analysis and Results
+
+
+### Software/Libraries
+
+This work was produced with the R language and the following packages:
+
+```{r pckgs, message=FALSE, warning=FALSE, cache=TRUE}
+# packages used
+library(bold)
+library(tidyverse)
+library(ggthemes)
+library(vegan)
+library(patchwork)
+library(leaflet)
+library(gt)
+library(kableExtra)
+library(ggrepel)
+library(scales)
+library(rcartocolor)
+library(igraph)
+library(plotly)
+```
+<br>
+
+----
+
+### Downloading BOLD specimen records
+
+All specimen records for *Araneae* were downloaded from the BOLD api on 2020-09-29. 
+<!-- I also obtained the World spider catalog dataset (on the same date) as a reference for comparison of taxonomic identifiers. -->
+
+
+```{r download, message=FALSE, warning=FALSE, cache=TRUE}
+## build the url for downloading
+taxon <- "Araneae"
+taxon <- paste0("taxon=", taxon)
+prefix <- "http://www.boldsystems.org/index.php/API_Public/specimen?"
+fmt <- "&format=tsv"
+url <- paste0(prefix, taxon, fmt)
+
+# download, parse data
+Araneae.df <- read_delim(url, delim = '\t',guess_max = 10000)
+write_rds(Araneae.df, "./data/BOLD.araneae.rds")
+# 
+```
+
+
+-----
+
+### BOLD 'Aranaea' dataset
+
+The dataset used in this analysis contained all the available specimen records of the order *Araceae*. 
+Any records lacking BIN identifiers or geographic metadata were removed. 
+There are 95,479 specimen records in this selection, representing 9,757 BIN clusters and these were collected in 136 countries.
+Specimen records were grouped by absolute latitude and classified as tropical (0-20˚), sub-tropical (20-40˚), temperate (40-60˚), or extreme (60-90˚). 
+Similarly, countries were grouped by their mean latitude of all specimens for diversity analyses.
+
+
+```{r processing, echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
+# read in previously downloaded data sets
+# Spider_catalog.df <- read_rds("./data/spider_catalog.rds")
+Araneae.raw <- read_rds("./data/BOLD.araneae.rds")
+
+# tidy up data and remove those missing country or bin data
+Araneae.df <- Araneae.raw %>%
+  # Keep only useful data columns
+  select(recordID, bin_uri, family_name, genus_name, species_name,
+         country, province_state, lat, lon, elev)  %>%
+  # Exclude any record that is missing BIN or Country labels
+  filter(!is.na(bin_uri) & !is.na(country))  %>%
+  # Any missing taxonomic labels are replaced with 'Unknown'
+  mutate(across(where(is.character), ~as.factor(replace_na(.x, 'Unknown')))) %>%
+  # Create new variable to group records by climate zone
+  mutate(zone = as.factor(case_when(
+    abs(lat) <= 20 ~ 'Tropical',
+    abs(lat) > 21 & abs(lat) <= 40  ~ 'Sub-tropical',
+    abs(lat) > 40 & abs(lat) <= 60  ~ 'Temperate',
+    abs(lat) > 60 ~ 'Extreme',
+  ))
+  )
+
+# Assigning countries to latitude zones based on mean latitude
+country_zones <- Araneae.df %>%
+  group_by(country) %>%
+  summarise(lat.mean = mean(lat, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(zone = as.factor(case_when(
+    abs(lat.mean) <= 20 ~ 'Tropical',
+    abs(lat.mean) > 20 & abs(lat.mean) <= 40  ~ 'Sub-tropical',
+    abs(lat.mean) > 40 & abs(lat.mean) <= 60  ~ 'Temperate',
+    abs(lat.mean) > 60 ~ 'Extreme',
+  ))) %>%
+  # ignore any countries that weren't labelled
+  filter(!is.na(zone)) %>%
+  mutate(Country = country) %>%
+  select(Country, country, zone)
+  
+# country_zones
+
+# table of basic statistics about specimen records from BOLD
+data_summary <- tibble(
+  Characteristic = c(
+    'Specimen records in BOLD',
+    'Records selection (not missing BIN and country data)',
+    'Number of unique BINs in selected records',
+    'Unique family taxa', 'Unique genus taxa', 'Unique species taxa',
+    'Source countries in selected records',
+    'Latitude range'),
+  Value = c(
+    comma(nrow(Araneae.raw)),
+    comma(nrow(Araneae.df)),
+    comma(length(unique(Araneae.df$bin_uri))),
+    length(unique(Araneae.df$family_name)),
+    comma(length(unique(Araneae.df$genus_name))),
+    comma(length(unique(Araneae.df$species_name))),
+    length(unique(Araneae.df$country)),
+    paste0(round(min(Araneae.df$lat, na.rm = TRUE), 1),
+           ' : ', round(max(Araneae.df$lat, na.rm = TRUE), 1))
+  ))
+
+# tabulate n specimens and species by country for arranging countries by n specimens and bins
+country.specimens.table <- Araneae.df %>%
+  group_by(country) %>%
+  summarize(specimens = n(),
+            species = length(unique(bin_uri))) %>%
+  arrange(desc(species)) %>%
+  left_join(country_zones %>% select(country, zone))
+
+```
+ 
+\hfill\break  
+
+**Table 1**. Summary of *Araneae* specimen records from the BOLD database that were used in this analysis. 
+     
+```{r summary.table, message=FALSE, warning=FALSE, cache=TRUE}
+kable(data_summary, format = 'pipe',escape = TRUE)
+```
+ 
+-----
+
+### Specimen Map
+
+A map showing the geographic distribution of spider specimens in the BOLD database. Strong North American and European sampling bias is evident; the Southern hemisphere is not well represented, especially Africa and Central Asia.
+   
+```{r spider.map, fig.width=8, fig.height=5, message=FALSE, warning=FALSE, cache=TRUE}
+## group specimens on a 1deg grid
+spider.map.df <- Araneae.df %>%
+  # round coords to nearest deg.
+  mutate(lat = round(lat),
+         lon = round(lon)) %>%
+  # group/count all specimens with same coords
+  group_by(lat, lon) %>%
+  mutate(n=n(),
+         BINs = length(unique(bin_uri))) %>%
+  select(lat, lon, n, BINs) %>%
+  distinct() %>%
+  # create popup labels with info
+  mutate(popups = paste0(
+    "<b>Lat: </b>", lat,
+    '<br><b>Long: </b>', lon,
+    "<br><b>Specimens: </b>", n,
+    "<br><b>BINs: </b>", BINs),
+    labs = paste(n, 'specimens')
+    ) %>%
+  filter(!(is.na(lat)|is.na(lon)))
+
+
+# create map
+
+make.spider.map <- function(spider.map.df){
+  
+  spider.map <- leaflet(spider.map.df) %>%
+    setView(zoom=1, lat=30, lng=5) %>%
+    addProviderTiles(providers$CartoDB.Positron) 
+  
+  # add latitude lines that samples were grouped by
+  for (i in c(-60, -40, -20, 0, 20, 40, 60)) {
+    spider.map <- spider.map %>%
+      addPolylines(lng = c(-360:360, 360:-360), 
+                   lat = rep(i, times=720), weight = 0.4)
+  }
+  
+  spider.map <- spider.map %>%
+    addCircleMarkers(
+      color = '#f20000',
+      lng = ~lon,
+      lat = ~lat,
+      radius = ~(log(n)+1)*0.4,
+      fillOpacity = 0.3,
+      stroke = FALSE,
+      popup = ~popups,
+      label = ~labs
+    )  
+  return(spider.map)
+}
+
+make.spider.map(spider.map.df)
+```
+
+**Figure 1. Geography of BOLD spider specimens**. Markers show the location and amount of specimens collected at each location; specimens were binned into a 1deg x 1deg grid for counting. Latitude lines correspond to the zones that were considered in the geographic analysis of spider diversity. *(An interactive version with zoom & labels is presented in the accompanying html-notebook 'JMogg_spider_diversity_notebook.html')*
+
+    
+### Composition and sampling depth by latitude
+
+```{r bar_families, fig.height=5, fig.width=7, message=FALSE, warning=FALSE, cache=TRUE}
+# tablulate specimen records count by BIN
+bin.table <- Araneae.df %>%
+  count(bin_uri)
+
+# plot histogram of specimen counts for BINs (bin size distribution)
+
+bin.hist <- bin.table %>%
+  ggplot(aes(x = n)) +
+  geom_histogram(bins = 100) +
+  scale_x_log10() + scale_y_log10() +
+  scale_fill_viridis_d() +
+  labs(x = 'Specimens assigned to BIN',
+       y = 'Frequency') +
+  theme_classic()
+  
+# Araneae.df2 <- Araneae.df %>%
+#   mutate(plotly.labs = paste("<b>Lat:</b>", lat,
+#                              '<br><b>Family</b>:, family_name))
+# Specimen distribution by latitude
+spec.lats.bar <- ggplot(Araneae.df, aes(y=lat, fill = family_name)) +
+  geom_histogram(alpha = 0.8, colour = 'lightgrey', orientation = 'y',
+                 show.legend = FALSE) +
+  scale_fill_viridis_d(option = 'C') +
+  labs(y = 'Latitude', x = 'Specimen count') +
+  theme_classic() +
+  theme(legend.position = 'null')
+
+# show both plots
+
+ggplotly(spec.lats.bar)
+```
+
+**Figure 2a.** A plot showing the number of samples collected by latitude; colors correspond to different spider families; popup labels show family name and specimen count - please ignore latitude in popup labels and read from y-axis. Families can be hidden/revealed by clicking icons on the legend (scroll to browse).
+
+```{r bin. hist, fig.align='center', fig.height=3, fig.width=4, message=FALSE, warning=FALSE, cache=TRUE}
+bin.hist
+```
+    
+    
+
+
+**Figure 2b.**  A histogram showing the distribution of the number of specimens that have been assigned to each BIN.
+   
+-----
+
+
+### Community abundances & alpha-diversity analysis
+
+Community abundance tables were created for the entire dataset, by country and by latitude zone for diversity analyses with the `vegan` package.
+
+
+```{r commun.abund, message=FALSE, warning=FALSE, cache=TRUE}
+# # creating community abundance matrices for vegan functions
+# # Make tables with bins as columns + replace missing values with zeroes
+
+# Bin counts from full dataset
+Araneae.df.bins <- Araneae.df %>%
+  # count specimens
+  count(bin_uri) %>%
+  # make wide table
+  pivot_wider(names_from = bin_uri, values_from = n)
+write_rds(Araneae.df.bins, "./data/Araneae.bins.rds")
+
+# community matrix with countries as observations
+# must make site into rownames
+Araneae.country.bins <- Araneae.df %>%
+  count(bin_uri, country) %>%
+  pivot_wider(names_from = bin_uri, values_from = n) %>%
+  # replace NA with 0 values
+  mutate(across(where(is.numeric), ~replace_na(.x, 0)))  %>%
+  # make site labels into df rownames
+  remove_rownames %>%
+  column_to_rownames(var = "country")
+write_rds(Araneae.country.bins, "./data/Araneae.country.bins.rds")
+
+# community matrix with latitude zones as observations
+Araneae.zone.bins <- Araneae.df %>%
+  count(bin_uri, zone) %>%
+  pivot_wider(names_from = bin_uri, values_from = n) %>%
+  mutate(across(where(is.numeric), ~replace_na(.x, 0))) %>%
+  filter(!is.na(zone)) %>%
+  remove_rownames %>%
+  column_to_rownames(var = "zone")
+write_rds(Araneae.zone.bins, "./data/Araneae.zone.bins.rds")
+```
+
+
+
+
+Richness of BINs and rarefied richness (sample=500), Shannon diversity, and Simpson diversity were calculated for each country and each latitude zones.
+
+
+```{r alpha, message=FALSE, warning=FALSE, cache=TRUE}
+# community abundance matrices made in previous code chunk
+Araneae.bins <- read_rds("./data/Araneae.bins.rds")
+Araneae.zone.bins <- read_rds("./data/Araneae.zone.bins.rds")
+Araneae.country.bins <- read_rds("./data/Araneae.country.bins.rds")
+
+country.bins.500 <- Araneae.country.bins %>%
+  bind_cols(sum = rowSums(Araneae.country.bins)) %>%
+  filter(sum > 500) %>%
+  select(-sum)
+
+# calculate richness & alpha diversity metrics for each country
+alpha.diversity.country <- data.frame(Country=rownames(country.bins.500)) %>%
+  bind_cols(
+    list(
+      Specimens = rowSums(country.bins.500),
+      Richness = rowSums(country.bins.500 > 0),
+      `Rarefied` = vegan::rarefy(country.bins.500, sample = 500),
+      Shannon = vegan::diversity(country.bins.500, index = 'shannon'),
+      Simpson = vegan::diversity(country.bins.500, index = 'simpson')
+    )
+    ) %>%
+  # round numbers off to 2 decimals
+  mutate(Shannon = round(Shannon, 2),
+         Simpson = round(Simpson, 2)) %>%
+  arrange(desc(Specimens)) %>%
+  left_join(country_zones %>% select(-country), by = 'Country')
+
+# kable(alpha.diversity.country, format = 'simple')
+
+rich_species_lm <- ggplot(alpha.diversity.country, 
+                          aes(x=log(Specimens), 
+                              y = log(Richness))) +
+  geom_smooth(method = lm) +
+  geom_point(aes(color = zone)) +
+  ggrepel::geom_text_repel(aes(label = Country, color = zone)) +
+  scale_color_discrete("Lat. zone") +
+  theme_classic()
+# rich_species_lm
+
+##########
+
+# arranging labels for plot below (lexico sort y-axis countries)    
+alpha.diversity.country$Country <- factor(alpha.diversity.country$Country, levels=rev(sort(alpha.diversity.country$Country)))
+
+# arranging data to long form with diversity indice + value rows for ea country
+alpha.country.long <- alpha.diversity.country %>%
+  pivot_longer(Rarefied:Simpson) %>%
+  arrange(desc(Country)) 
+
+# rearrange grid columns for plot by changing levels
+alpha.country.long$name <- factor(alpha.country.long$name, levels = c("Richness", "Rarefied","Shannon", "Simpson"))
+alpha.country.long$zone <- factor(alpha.country.long$zone, levels = c("Extreme", "Temperate","Sub-tropical", "Tropical"))
+
+# grid plot of diversity indices
+diversity.plot <- ggplot(alpha.country.long,
+                         aes(y = Country, x = value, colour = zone)) +
+  geom_point() +
+  geom_segment(aes(x = 0, xend = value, yend = Country)) +
+  facet_grid(~name, scales = 'free') +
+  labs(x = '', y='') +
+  scale_color_discrete("Lat. zone") +
+  scale_fill_discrete("Lat. zone") +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        legend.position = 'null',
+        axis.text.x = element_text(angle = 30, vjust = 0))
+
+########
+
+# calculate richness & alpha diversity metrics for latitude zones
+alpha.diversity.zones <- data.frame(Zone=rownames(Araneae.zone.bins)) %>%
+  # bind a new column for each statistic
+  bind_cols(
+    list(
+      `Range (abs. deg)` = rev(c('0-20', '20-40','40-60', '60+')),
+      n = rowSums(Araneae.zone.bins),
+      Richness = rowSums(Araneae.zone.bins > 0),
+      `Rarefied` = vegan::rarefy(Araneae.zone.bins, sample = 500),
+      Shannon = vegan::diversity(Araneae.zone.bins, index = 'shannon'),
+      Simpson = vegan::diversity(Araneae.zone.bins, index = 'simpson')
+    )
+  ) %>%
+  mutate(Shannon = round(Shannon, 2),
+         Simpson = round(Simpson, 2),
+         `Rarefied` = round(`Rarefied`))
+
+#######
+
+# arranging labels for plot below (lexico sort y-axis zones)    
+alpha.diversity.zones$Zone <- factor(alpha.diversity.zones$Zone, levels=rev(sort(alpha.diversity.zones$Zone)))
+
+# arranging data to long form with diversity indice + value rows for ea country
+alpha.zones.long <- alpha.diversity.zones %>%
+  pivot_longer(Rarefied:Simpson) %>%
+  arrange(desc(Zone)) 
+
+# rearrange grid rows, columns for plot
+alpha.zones.long$Zone <- factor(alpha.zones.long$Zone, levels = c("Extreme", "Temperate","Sub-tropical", "Tropical"))
+
+alpha.zones.long$name <- factor(alpha.zones.long$name, levels = c("Richness", "Rarefied","Shannon", "Simpson"))
+
+
+# grid plot of diversity indices
+diversity.plot.zone <- ggplot(alpha.zones.long,aes(y = Zone, x = value, fill = Zone)) +
+  geom_col() +
+  # geom_segment(aes(x = 0, xend = value, yend = Zone)) +
+  facet_grid(~name, scales = 'free') +
+  labs(x = '', y='') +
+  scale_fill_discrete("Lat. zone") +
+  theme_classic() +
+  
+  theme(strip.background = element_blank(),
+        legend.position = 'null')
+
+#########
+
+alpha.zones.countries.plot <- alpha.country.long %>%
+  ggplot(aes(y=zone, x = value, colour = zone)) +
+  geom_boxplot(colour = 'gray80',outlier.shape = NA) +
+  geom_jitter(alpha = 0.9, pch = 0) +
+  scale_fill_discrete("Lat. zone") +
+  geom_point(data = alpha.zones.long, aes(y=Zone, x = value, colour = Zone), size = 2) +
+  facet_grid(~name, scales='free') +
+  scale_color_discrete("Lat. zone") +
+  scale_fill_discrete("Lat. zone") +
+  labs(x='', y='') +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        legend.position = 'null',
+        axis.text.x = element_text(angle = 30, vjust = 0))
+
+
+```
+  
+
+**Table 2.** Richness and diversity of the BOLD spider collection in different latitude zones (based on absolute distance from the equator).  
+      
+
+```{r table.alpha, message=FALSE, warning=FALSE, cache=TRUE}
+kable(alpha.diversity.zones, format = 'pipe')
+```
+
+----
+
+```{r fig.height=7, fig.width=4, message=FALSE, warning=FALSE, cache=TRUE}
+patchwork::wrap_plots(alpha.zones.countries.plot/diversity.plot)
+```
+  
+**Figure 4.** Rarefied richness (n=500), Shannon diversity, and Simpson diversity of spider spider communities in latitude zones (top) and countries (bottom). Countries were assigned to zones based on their mean specimen latitude. *top*: In each panel, the values for each country in the zone are shown as hollow squares, with the distribution shown by the boxplot; the values for the zone communities shown as solid circles. *bottom*: the index value is shown for each country, lollipops are colored by the latitude zone the country was assigned to. 
+  
+  
+
+
+
+### Rarefaction & Species Abundance Curves
+
+Rarefaction were computed using the vegan::rarecurve function for specimens grouped by each of country and latitude zone.
+
+
+```{r rarefaction.computation, message=FALSE, warning=FALSE, cache=TRUE}
+# full data rarefaction
+Araneae.rar <- rarecurve(Araneae.df.bins,)
+Araneae.rar <- tibble(y = Araneae.rar[[1]]) %>%
+  mutate(x=row_number())
+write_rds(Araneae.rar, "./data/Araneae.rarefaction.rds")
+
+## rarefaction curves by lat zone
+Araneae.zone.rar <- rarecurve(Araneae.zone.bins)
+
+# manipulate list output from vegan back into tidy data
+Araneae.zone.rar <- tibble(zone = rownames(Araneae.zone.bins),
+       list = Araneae.zone.rar) %>%
+  # spread list into individual columns
+  unnest_wider(col = list) %>%
+  # get long form table
+  pivot_longer(cols = -zone) %>%
+  # remove rows missing value & useless names column
+  filter(!is.na(value)) %>%
+  select(-name) %>%
+  # create vector for sampling depth
+  group_by(zone) %>%
+  mutate(sample_size = row_number())
+write_rds(Araneae.zone.rar, "./data/Araneae.zones.rarefaction.rds")
+
+## rarefaction curves by country
+Araneae.country.rar <- rarecurve(Araneae.country.bins)
+
+# manipulate list output from vegan back into tidy data
+Araneae.country.rar <- tibble(Country = rownames(Araneae.country.bins),
+       list = Araneae.country.rar) %>%
+  unnest_wider(col = list) %>%
+  pivot_longer(cols = -Country) %>%
+  filter(!is.na(value)) %>%
+  select(-name) %>%
+  group_by(Country) %>%
+  mutate(sample_size = row_number())
+write_rds(Araneae.country.rar, "./data/Araneae.country.rarefaction.rds")
+```
+
+
+Species accumulation curves were computed using the vegan::specaccum function for specimens grouped by each of country and latitude zone.
+
+```{r specaccum.computation, message=FALSE, warning=FALSE, cache=TRUE}
+# ## Species accumulation curves
+# specaccum by country
+Specaccum.country <- specaccum(Araneae.country.bins)
+Specaccum.country <- tibble(
+  sites = Specaccum.country['sites'],
+  richness = Specaccum.country['richness'],
+  sd = Specaccum.country['sd'],
+  ) %>%
+  unnest(cols = c(sites, richness, sd)) %>%
+  mutate(sd1 = ifelse(richness-sd>=0, richness-sd, 0),
+         sd2 = richness+sd)
+write_rds(Specaccum.country, "./data/Specaccum.country.rds")
+
+# specaccum by zone
+Specaccum.zone <- specaccum(Araneae.zone.bins)
+Specaccum.zone <- tibble(
+  sites = Specaccum.zone['sites'],
+  richness = Specaccum.zone['richness'],
+  sd = Specaccum.zone['sd'],
+  ) %>%
+  unnest(cols = c(sites, richness, sd)) %>%
+  mutate(sd1 = ifelse(richness-sd>=0, richness-sd, 0),
+         sd2 = richness+sd)
+write_rds(Specaccum.zone, "./data/Specaccum.zone.rds")
+
+```
+
+Plots were created for the rarefaction and species accumulation curves in the following code:
+
+```{r ecol.analysis, fig.height=5, fig.width=8, message=FALSE, warning=FALSE, cache=TRUE}
+## RAREFACTION
+# read in rar. curve data computed above
+Araneae.rar <- read_rds("./data/Araneae.rarefaction.rds")
+Araneae.zone.rar <- read_rds("./data/Araneae.zones.rarefaction.rds")
+Araneae.country.rar <- read_rds("./data/Araneae.country.rarefaction.rds")
+
+# rarefaction plot for entire dataset
+plot.rar.full <- Araneae.rar %>%
+  ggplot(aes(x=x/1000, y=y)) +
+  geom_line() +
+  labs(y = 'Unique BINs', x = 'Sample size (k)') +
+  theme_classic()
+
+# rarefaction curves for latitude zones
+plot.rar.zone <- ggplot(Araneae.zone.rar,
+                        aes(x=sample_size/1000, y = value,
+                            group = zone, colour = zone)) +
+  geom_line(alpha = 0.7) +
+  scale_colour_discrete('Lat. zone') +
+  labs(x = 'Sample size (k)', y = 'Unique BINs') +
+  theme_classic()
+
+# added lat zone labels to country rarefaction curves data for plot
+Araneae.country.rar <- left_join(Araneae.country.rar, country_zones, by = 'Country')
+
+# plot rarefaction curves for each country, colour by zone
+plot.rar.country <-
+  Araneae.country.rar %>%
+  filter(!is.na(zone)) %>%
+  ggplot(aes(x=sample_size/1000, y = value)) +
+  geom_line(aes(group = Country, colour = zone), alpha = 0.7) +
+  # add labels for 10 most-sampled countries
+  geom_text_repel(data = country.specimens.table[1:10,],
+                   aes(label = country, x = specimens/1000, y = species),
+                   nudge_x = 0, size = 3,
+                   na.rm = TRUE) +
+  scale_colour_discrete('Lat. zone') +
+  labs(x = 'Sample size (k)', y = 'Unique BINs') +
+  theme_classic()
+
+plot.rar.country2 <- 
+  Araneae.country.rar %>%
+  filter(!is.na(zone)) %>%
+  ggplot(aes(x=sample_size, y = value)) +
+  geom_line(aes(group = Country, colour = zone), alpha = 0.7) +
+  # add labels for 10 most-sampled countries
+  geom_text_repel(data = country.specimens.table[1:10,],
+                   aes(label = country, x = specimens, y = species),
+                   nudge_x = 0, size = 3,
+                   na.rm = TRUE) +
+  scale_colour_discrete('Lat. zone') +
+  labs(x = 'Sample size', y = 'Unique BINs') +
+  theme_classic() +
+  xlim(c(0, 500)) +
+  ylim(c(0, 340))
+
+
+## SPECIES ACCUMULATION
+Specaccum.country <- read_rds("./data/Specaccum.country.rds")
+Specaccum.zone <- read_rds("./data/Specaccum.zone.rds")
+
+# plot species accumulation by country
+plot.Specaccum.country <-  ggplot(Specaccum.country) +
+  geom_ribbon(aes(x=sites, y=richness, ymin = sd1, ymax = sd2),
+              fill = 'cornflowerblue', alpha = 0.3) +
+  geom_line(aes(x = sites, y = richness),
+            size = 1.3, colour = 'blue4', alpha = 0.7) +
+  labs(y = 'BIN Richness', x = 'Countries') +
+  theme_classic()
+
+# plot species accumulation by latitude zone
+plot.Specaccum.zone <-  ggplot(Specaccum.zone) +
+  geom_ribbon(aes(x=sites, y=richness, ymin = sd1, ymax = sd2),
+              fill = 'red', alpha = 0.2) +
+  geom_line(aes(x = sites, y = richness),
+            size = 1.3, colour = 'red3', alpha = 0.7) +
+  labs(y = 'BIN Richness', x = 'Latitude zones') +
+  theme_classic()
+
+## create rarefaction/specaccum plots figure
+
+```
+
+   
+```{r show.rarefaction, fig.height=8, fig.width=8, message=FALSE, warning=FALSE, cache=TRUE}
+# show rarefaction plots panel with patchwork::
+(plot.rar.full + plot.rar.zone) / 
+  (plot.rar.country + plot.rar.country2) /
+  (plot.Specaccum.country + plot.Specaccum.zone) +
+  plot_annotation(tag_levels = 'A') +
+  plot_layout(guides = 'collect') & 
+  theme(plot.tag.position = c(0, 1),
+        legend.position = "right",
+        plot.tag = element_text(size = 8, hjust = 0, vjust = 0))
+```
+    
+**Figure 3. A-D:** Rarefaction curves for entire collection of BOLD spider specimens (A), by latitude zone (B), and by source country (C). Because of the discrepency in sampling, a close-up of the countries' rarefaction curves are shown for smaller sample sizes (D). Curves are coloured by latitude zone where applicable. Countries are assigned to latitude zones by the mean latitude of all their samples.  Rarefaction curves were computed using the `vegan::rarecurve` function.  **EF:** Species accumulation curves were computed using the vegan::specaccum function for specimens grouped by each of country (E) and latitude zone (F); lines show richness +/- sd.
+
+
+### Ordination by NMDS and species network anaylsis
+
+```{r nmds.plot, fig.height=4, fig.show='hold', fig.width=5, message=FALSE, warning=FALSE, cache=TRUE}
+# NMDS
+zone.nmds <- metaMDS(Araneae.zone.bins, distance = 'bray', trace = FALSE)
+# zone.nmds
+par(mar=c(5,4,1,1))
+plot(zone.nmds, alpha=0.5, cex = 0.7)
+text(zone.nmds, display = 'sites', cex = 0.9)
+```
+    
+**Figure 5.** NMDS of spider BIN abundances in four latitude zones using Bray distance and Wisconsin standardization of square-root-transformed abundances.
+
+
+  
+```{r network, fig.align='center', fig.height=3, fig.width=4, message=FALSE, warning=FALSE, cache=TRUE}
+## Network plot with shared BINs between zones
+Araneae.zone.bins <- read_rds("./data/Araneae.zone.bins.rds")
+# make an edgelist for simple graph (for bins shared between zones)
+edgelist <- tibble(
+  u = c(rownames(Araneae.zone.bins)),
+  v = rep(list(rownames(Araneae.zone.bins)),4)
+) %>%
+  unnest(v) %>%
+  filter(!u==v)
+
+
+# get rid of duplicate edges in edgelist (since graph is not directional)
+edge.strings <-  str_split(paste(edgelist$u, edgelist$v), ' ')
+# sort edges to remove directionality
+edgelist <- unique(lapply(edge.strings, function(x) unique(sort(x))))
+# remove self-self edges
+edgelist <- edgelist[which(lengths(edgelist)>1)]
+# paste u v vertices for each edge to filter bins.edgelist later (below)
+edgelist <- lapply(edgelist, function(x) paste0(x, collapse = ' '))
+rm(edge.strings)
+
+# Get list of unique bins for each zone from zone abund. matrix
+zone.bins.list <- tibble(Araneae.zone.bins) %>%
+  mutate(zone = rownames(Araneae.zone.bins)) %>%
+  pivot_longer(-zone) %>%
+  filter(!value == 0) %>%
+  group_by(zone) %>%
+  mutate(bins = list(name)) %>%
+  select(-c(value, name)) %>%
+  distinct() %>%
+  mutate(uniques = unique(bins)) 
+
+
+# Create matrix with sizes of intersect of unique bins between zones. Each col has the size of the intersection between a zone and each zone (self-self is on diagonal) - for network edge weights
+bins.ls <- zone.bins.list %>%
+  select(zone, bins) %>%
+  mutate(Extreme = length(intersect(zone.bins.list[1, 3][[1]][[1]], bins[[1]])),
+         Temperate = length(intersect(zone.bins.list[2, 3][[1]][[1]], bins[[1]])),
+         `Sub-tropical` = length(intersect(zone.bins.list[3, 3][[1]][[1]], bins[[1]])),
+         Tropical = length(intersect(zone.bins.list[4, 3][[1]][[1]], bins[[1]])),
+  ) %>%
+  select(-bins) %>%
+  pivot_longer(Extreme:Tropical) %>%
+  rename(zone1 = zone,
+         zone2 = name,
+         weight = value)
+
+# Filter weighted edgelist to keep single edge for each pair (not bidirectional - made 'edgelist' at top of chunk)
+bins.edges <- bins.ls %>%
+  filter(!zone1 == zone2) %>%
+  mutate(edge = paste(zone1, zone2)) %>%
+  filter(edge %in% edgelist) %>%
+  select(-edge)
+
+
+# total number of unique bins at each zone - for vertex size
+total_bins <- bins.ls  %>%
+  filter(zone1 == zone2) %>%
+  select(-zone2) %>%
+  rename(size = weight)
+
+net <- graph_from_data_frame(d= bins.edges, vertices = total_bins, directed = F)
+
+#vertice properties
+V(net)$color <- c( 'cyan', "gold", "tomato", "plum")
+V(net)$size <- total_bins$size/100 + 20
+
+# edge properties
+E(net)$weight <- bins.edges$weight*100
+E(net)$width <- sqrt(E(net)$weight)/20
+E(net)$edge.label <- bins.edges$weight
+E(net)$edge.color <- "gray90"
+E(net)$arrow.size <- .0
+
+# Plot species network
+set.seed(4)
+par(mar=c(1,1,1,1))
+plot(net, 
+     layout = layout.fruchterman.reingold(net),
+     label.dist = 2,
+     edge.label = bins.edges$weight,
+     edge.label.color ="navy",
+     edge.label.cex = 0.8,
+     edge.label.family = 'sans',
+     vertex.label = paste0(V(net)$name, '\n(', total_bins$size, ')'),
+     vertex.label.color="black",
+     vertex.label.family = 'sans',
+     vertex.label.font = 2,
+     vertex.label.cex=.7,
+     vertex.frame.color = 'white')
+```
+  
+  
+**Figure 6.** Network of latitude-zoned spider assemblages linked by shared barcodes shows that similarity increases with latitude. Vertices represent latitude zone and BIN richness; edges are wieghted by the number of shared BINs between zones.
+   
+
+----
+
+
+# Discussion
+
+<!-- summary -->
+In this work I examined the latitudinal diversity gradient in DNA-barcoded spider specimens recorded in BOLD; as well as to evaluate geographical sampling bias in this collection. To this end, a number of ecological analysis were performed including rarefaction, species accumulation, and ordination. The Barcode of Life database (BOLD) contains a huge number of spider specimen records (124k) and associated DNA-barcode sequences (106k; table 1) [@Ratnasingham2007; @Ratnasingham2013]. There is a surprisingly large number of unique DNA barcode identifiers (BINs) compared to species names (9,845 *vs* 3,822). Additionally large number of specimens are missing taxonomic labels at the family, genus, and species levels (17k, 21k, and 23k records, respectively), indicating that barcode-based analysis is especially useful for spiders. Most barcodes have only a few specimens, and the number of specimens per barcode sequence has a negative binomial distribution (fig. 2 right)
+
+<!-- global sampling effort -->
+To evaluate the global distribution of the sampling effort represented in the BOLD spider collection, all records having barcodes and geodata (96k) were binned into a 1 deg grid and mapped (fig. 1). Strong North American and European sampling bias is evident; vast swaths of Africa and Central Asia have no representatives. The sampling of spider specimens is heavily skewed to northern latitudes (fig. 2 left) though this is roughly proportional to overall landmass. While there are a large number of spider families represented in the dataset, a few families (*Linyphiidae*, *Lycosidae* and *Araneidae*) tend to dominate communities across latitudes.
+
+<!-- latitudinal diversity -->
+Spiders biodiversity is generally known to decrease with distance from the equator [@Platnick1991; @Piel2018]. To evaluate the latitudinal diversity gradient of the BOLD spiders data, I first grouped records into four 'latitudinal communities' based on absolute latitude: tropical (+/-0-20 deg), sub-tropical (20-40), temperate (40-60) and extreme (60+). Similarly, specimen-source countries were categorized into these zones based on the mean latitude of specimens collected in each country. 
+
+<!-- rarefaction -->
+Diversity analyses of these national and latitudinal communities showed that diversity generally decreases with distance from the equator, as was expected from previous research [@Platnick1991; @Piel2018]. Overall, the sub-tropical zone contained the greatest barcode (BIN) richness followed by the temperate and tropical zones (table 2, fig 2b.). Rarefaction analysis showed that the sub-tropical and tropical communities are fairly similar in terms of diversity and are more diverse than the temperate and extreme latitude zones (fig. 3b). When national communities are considered, we can see that there is a large degree of variance in diversity between countries at similar distances from the equator, and this is especially true for the communities of the few tropical nations examined (only fig. 3c,d).
+
+<!-- alpha diversity -->
+When considering equal sample sizes, the sub-tropical zone had the greatest rarefied BIN richness but this was only slightly larger than the tropical zone (table 2, fig. 4). Temperate and extreme latitudes had relatively low Shannon diversity, while the subtropical-zone had a slightly greater Shannon diversity than the tropical zone. Simpson diversity was not very informative for differentiating communities at the zone or country level, with most values approaching 1. Anova tests of countries' richness and Shannon index data showed that the differences in means between latitude zones were not statistically significant. This analysis was hindered by the low number of site countries having enough specimens (n>499, countries=21) and these were concentrated in the temperate and subtropical zones, leading to large error values in estimating the diversity of tropical and extreme zones. Overall, the BOLD spiders data follow the expected negative latitude-diversity trend; however, peak richness and diversity was observed in the sub-tropical zones (+/- 20-40 deg latitude).
+
+
+<!-- NMDS + NETWORK -->
+Ordination and network analysis of latitude zone communities showed that the temperate and extreme zones were the most similar in composition and had the greatest number of shared BINs at 654 (figs. 5,6), representing 78% of the BINs from the extreme latitude community and 22% of the temperate community. This was contrasted by the relatively few bins shared between the tropical, sub-tropical, and temperate zones. From ordination, we see that the extreme and temperature communities are most similar in terms of composition while the sub-tropical and tropical zones are as dissimilar to the temperate and extreme zones as they are to each other.
+
+<!-- The sampling effort in some countries is especially suspect.  -->
+The mapping of specimens and rarefaction curves produced from BIN abundances by country and latitude zone (fig. 2) both show a strong geographic bias in the database and an under-powered sampling of many regions, particularly at tropical latitudes. Despite the wide range of source countries, Canadian specimens account for nearly half the collection with the remaining records being predominantly from the US and handful of other countries. This 'Boreal bias' is a prevalent theme in ecology [@Platnick1991] and the BOLD data reflects this. As such, some results of this diversity analysis are particularly suspect. Brazil, for example, appears to have extremely low spider diversity but this is contrary to what is expected from the latitude-diversity trend and the highly-productive landscape.
+
+<!-- conclusion -->
+In summary, BOLD data show decreasing trend in spider biodiversity with distance from the equator as has been previously described [@Piel2018, @Platnick1991]. There is great variation in diversity between countries in the BOLD data and a limited number of tropical countries with adequate sampling. This made it difficult find significant changes in richness or diversity across latitudes. Sampling bias has affected the analysis to an extent but this is somewhat compensated for by the large volume of specimens collected and the use of broad latitude zones. The BOLD database is indeed a valuable resource for evaluating global ecological trends. BOLD's value will continue to increase with the addition of collections from under-represented areas.
+
+
+# Code and supplemental
+
+Please find the code used to create this work in the file `JMogg_spider_diversity_notebook.nb.html` where it is presented in the 'literate programming' style. This pdf document and the notebook were rendered from Rmarkdown files `JMogg_spider_diversity_pdf.Rmd` and `JMogg_spider_diversity_notebook.Rmd`, respectively. Figures have been labelled in the order that they appear in the pdf format.
+
+-----
+
+# Acknowledgements
+
+We truly stand on the shoulders of giants and I found the following tutorials very helpful while creating this work:
+
+- Vegan Tutorial by Peter Clark https://peat-clark.github.io/BIO381/veganTutorial.html 
+
+- Mosquito community diversity analysis with vegan by Randi H Griffin http://www.randigriffin.com/2017/05/23/mosquito-community-ecology-in-vegan.html
+
+- Network Analysis and Visualization with R and igraph by
+Katherine Ognyanova https://kateto.net/netscix2016.html
+
+-----
+
+# References
+
+<!-- bibliography from references.bib is inserted at end of pdf when knitting -->
