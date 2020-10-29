@@ -22,7 +22,8 @@ bibliography: references.bib
 knitr::opts_chunk$set(
 	echo = TRUE,
 	message = FALSE,
-	warning = FALSE
+	warning = FALSE,
+	cache = TRUE
 )
 ```
 
@@ -80,8 +81,8 @@ fmt <- "&format=tsv"
 url <- paste0(prefix, taxon, fmt)
 
 # download, parse data
-Araneae.df <- read_delim(url, delim = '\t',guess_max = 10000)
-write_rds(Araneae.df, "./data/BOLD.araneae.rds")
+Araneae.df <- read_delim(url, delim = '\t', guess_max = 10000)
+write_rds(Araneae.df, "./data/BOLD.araneae.rds", compress = 'gz')
 # 
 ```
 
@@ -159,7 +160,7 @@ data_summary <- tibble(
            ' : ', round(max(Araneae.df$lat, na.rm = TRUE), 1))
   ))
 
-# tabulate n specimens and species by country for arranging countries by n specimens and bins
+# tabulate n specimens and n bins by country for arranging countries by n specimens and bins
 country.specimens.table <- Araneae.df %>%
   group_by(country) %>%
   summarize(specimens = n(),
@@ -240,6 +241,7 @@ make.spider.map(spider.map.df)
 
 **Figure 1. Geography of BOLD spider specimens**. Markers show the location and amount of specimens collected at each location; specimens were binned into a 1deg x 1deg grid for counting. Latitude lines correspond to the zones that were considered in the geographic analysis of spider diversity. *(An interactive version with zoom & labels is presented in the accompanying html-notebook 'JMogg_spider_diversity_notebook.html')*
 
+-----
     
 ### Composition and sampling depth by latitude
 
@@ -488,7 +490,7 @@ patchwork::wrap_plots(alpha.zones.countries.plot/diversity.plot)
 **Figure 4.** Rarefied richness (n=500), Shannon diversity, and Simpson diversity of spider spider communities in latitude zones (top) and countries (bottom). Countries were assigned to zones based on their mean specimen latitude. *top*: In each panel, the values for each country in the zone are shown as hollow squares, with the distribution shown by the boxplot; the values for the zone communities shown as solid circles. *bottom*: the index value is shown for each country, lollipops are colored by the latitude zone the country was assigned to. 
   
   
-
+-----
 
 
 ### Rarefaction & Species Abundance Curves

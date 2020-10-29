@@ -9,7 +9,8 @@ bibliography: references.bib
 knitr::opts_chunk$set(
 	echo = FALSE,
 	message = FALSE,
-	warning = FALSE
+	warning = FALSE,
+	cache = TRUE
 )
 # options(tinytex.verbose = TRUE)
 ```
@@ -25,8 +26,25 @@ library(leaflet)
 library(ggrepel)
 library(igraph)
 library(kableExtra)
+library(beepr)
 rm(list = ls())
 ```
+
+```{r}
+## build the url for downloading
+# taxon <- "Araneae"
+# taxon <- paste0("taxon=", taxon)
+# prefix <- "http://www.boldsystems.org/index.php/API_Public/specimen?"
+# fmt <- "&format=tsv"
+# url <- paste0(prefix, taxon, fmt)
+# 
+# ## download, parse data
+# # Araneae.raw <- read_delim(url, delim = '\t', guess_max = 10000)
+# beep(2)
+# write_rds(Araneae.raw, "./data/BOLD.araneae.rds", compress = 'gz')
+
+```
+
 
 ```{r processing, echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
 # read in previously downloaded data sets
