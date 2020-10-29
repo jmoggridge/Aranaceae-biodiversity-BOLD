@@ -61,6 +61,7 @@ library(scales)
 library(rcartocolor)
 library(igraph)
 library(plotly)
+library(beepr)
 ```
 <br>
 
@@ -80,9 +81,10 @@ prefix <- "http://www.boldsystems.org/index.php/API_Public/specimen?"
 fmt <- "&format=tsv"
 url <- paste0(prefix, taxon, fmt)
 
-# download, parse data
-Araneae.df <- read_delim(url, delim = '\t', guess_max = 10000)
-write_rds(Araneae.df, "./data/BOLD.araneae.rds", compress = 'gz')
+## download, parse data
+# Araneae.raw <- read_delim(url, delim = '\t', guess_max = 10000)
+beep(2)
+# write_rds(Araneae.raw, "./data/BOLD.araneae.rds", compress = 'gz')
 # 
 ```
 
@@ -307,7 +309,7 @@ Araneae.df.bins <- Araneae.df %>%
   count(bin_uri) %>%
   # make wide table
   pivot_wider(names_from = bin_uri, values_from = n)
-write_rds(Araneae.df.bins, "./data/Araneae.bins.rds")
+write_rds(Araneae.df.bins, "./data/Araneae.bins.rds", compress = 'gz')
 
 # community matrix with countries as observations
 # must make site into rownames
@@ -319,7 +321,7 @@ Araneae.country.bins <- Araneae.df %>%
   # make site labels into df rownames
   remove_rownames %>%
   column_to_rownames(var = "country")
-write_rds(Araneae.country.bins, "./data/Araneae.country.bins.rds")
+write_rds(Araneae.country.bins, "./data/Araneae.country.bins.rds", compress = 'gz')
 
 # community matrix with latitude zones as observations
 Araneae.zone.bins <- Araneae.df %>%
@@ -329,7 +331,7 @@ Araneae.zone.bins <- Araneae.df %>%
   filter(!is.na(zone)) %>%
   remove_rownames %>%
   column_to_rownames(var = "zone")
-write_rds(Araneae.zone.bins, "./data/Araneae.zone.bins.rds")
+write_rds(Araneae.zone.bins, "./data/Araneae.zone.bins.rds", compress = 'gz')
 ```
 
 
@@ -355,7 +357,7 @@ alpha.diversity.country <- data.frame(Country=rownames(country.bins.500)) %>%
     list(
       Specimens = rowSums(country.bins.500),
       Richness = rowSums(country.bins.500 > 0),
-      `Rarefied` = vegan::rarefy(country.bins.500, sample = 500),
+      Rarefied = vegan::rarefy(country.bins.500, sample = 500),
       Shannon = vegan::diversity(country.bins.500, index = 'shannon'),
       Simpson = vegan::diversity(country.bins.500, index = 'simpson')
     )
@@ -497,13 +499,14 @@ patchwork::wrap_plots(alpha.zones.countries.plot/diversity.plot)
 
 Rarefaction were computed using the vegan::rarecurve function for specimens grouped by each of country and latitude zone.
 
+<!-- this chunk takes a very long time -->
 
 ```{r rarefaction.computation, message=FALSE, warning=FALSE, cache=TRUE}
 # full data rarefaction
-Araneae.rar <- rarecurve(Araneae.df.bins,)
+Araneae.rar <- rarecurve(Araneae.df.bins)
 Araneae.rar <- tibble(y = Araneae.rar[[1]]) %>%
   mutate(x=row_number())
-write_rds(Araneae.rar, "./data/Araneae.rarefaction.rds")
+write_rds(Araneae.rar, "./data/Araneae.rarefaction.rds", compress = 'gz')
 
 ## rarefaction curves by lat zone
 Araneae.zone.rar <- rarecurve(Araneae.zone.bins)
@@ -521,7 +524,7 @@ Araneae.zone.rar <- tibble(zone = rownames(Araneae.zone.bins),
   # create vector for sampling depth
   group_by(zone) %>%
   mutate(sample_size = row_number())
-write_rds(Araneae.zone.rar, "./data/Araneae.zones.rarefaction.rds")
+write_rds(Araneae.zone.rar, "./data/Araneae.zones.rarefaction.rds", compress = 'gz')
 
 ## rarefaction curves by country
 Araneae.country.rar <- rarecurve(Araneae.country.bins)
@@ -535,7 +538,7 @@ Araneae.country.rar <- tibble(Country = rownames(Araneae.country.bins),
   select(-name) %>%
   group_by(Country) %>%
   mutate(sample_size = row_number())
-write_rds(Araneae.country.rar, "./data/Araneae.country.rarefaction.rds")
+write_rds(Araneae.country.rar, "./data/Araneae.country.rarefaction.rds", compress = 'gz')
 ```
 
 
@@ -553,7 +556,7 @@ Specaccum.country <- tibble(
   unnest(cols = c(sites, richness, sd)) %>%
   mutate(sd1 = ifelse(richness-sd>=0, richness-sd, 0),
          sd2 = richness+sd)
-write_rds(Specaccum.country, "./data/Specaccum.country.rds")
+write_rds(Specaccum.country, "./data/Specaccum.country.rds", compress = 'gz')
 
 # specaccum by zone
 Specaccum.zone <- specaccum(Araneae.zone.bins)
@@ -565,7 +568,7 @@ Specaccum.zone <- tibble(
   unnest(cols = c(sites, richness, sd)) %>%
   mutate(sd1 = ifelse(richness-sd>=0, richness-sd, 0),
          sd2 = richness+sd)
-write_rds(Specaccum.zone, "./data/Specaccum.zone.rds")
+write_rds(Specaccum.zone, "./data/Specaccum.zone.rds", compress = 'gz')
 
 ```
 
@@ -670,6 +673,7 @@ plot.Specaccum.zone <-  ggplot(Specaccum.zone) +
     
 **Figure 3. A-D:** Rarefaction curves for entire collection of BOLD spider specimens (A), by latitude zone (B), and by source country (C). Because of the discrepency in sampling, a close-up of the countries' rarefaction curves are shown for smaller sample sizes (D). Curves are coloured by latitude zone where applicable. Countries are assigned to latitude zones by the mean latitude of all their samples.  Rarefaction curves were computed using the `vegan::rarecurve` function.  **EF:** Species accumulation curves were computed using the vegan::specaccum function for specimens grouped by each of country (E) and latitude zone (F); lines show richness +/- sd.
 
+----
 
 ### Ordination by NMDS and species network anaylsis
 
@@ -682,7 +686,7 @@ plot(zone.nmds, alpha=0.5, cex = 0.7)
 text(zone.nmds, display = 'sites', cex = 0.9)
 ```
     
-**Figure 5.** NMDS of spider BIN abundances in four latitude zones using Bray distance and Wisconsin standardization of square-root-transformed abundances.
+**Figure 5.** NMDS of spider BIN abundances in four latitude zones using Bray distance and Wisconsin standardization of square-root-transformed abundances (red crosses repesent individual spider BIN groups).
 
 
   
@@ -780,7 +784,7 @@ plot(net,
 ```
   
   
-**Figure 6.** Network of latitude-zoned spider assemblages linked by shared barcodes shows that similarity increases with latitude. Vertices represent latitude zone and BIN richness; edges are wieghted by the number of shared BINs between zones.
+**Figure 6.** Network of latitude-zoned spider assemblages linked by shared barcodes shows that similarity increases with latitude. Vertices represent latitude zone and BIN richness; edges are weighted by the number of shared BINs between zones.
    
 
 ----
@@ -836,3 +840,8 @@ Katherine Ognyanova https://kateto.net/netscix2016.html
 # References
 
 <!-- bibliography from references.bib is inserted at end of pdf when knitting -->
+```{r include=FALSE}
+# print('done')
+beep(8)
+```
+
